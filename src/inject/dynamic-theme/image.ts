@@ -3,7 +3,7 @@ import {bgFetch} from './network';
 import {getSRGBLightness} from '../../utils/color';
 import {loadAsDataURL} from '../../utils/network';
 import type {FilterConfig} from '../../definitions';
-import {logInfo, logWarn} from '../../utils/log';
+import {logInfo, logWarn} from '../utils/log';
 import AsyncQueue from '../../utils/async-queue';
 
 export interface ImageDetails {
@@ -78,7 +78,7 @@ function createCanvas() {
     canvas = document.createElement('canvas');
     canvas.width = maxWidth;
     canvas.height = maxHeight;
-    context = canvas.getContext('2d');
+    context = canvas.getContext('2d', {willReadFrequently: true});
     context.imageSmoothingEnabled = false;
 }
 

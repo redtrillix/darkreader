@@ -16,7 +16,7 @@ If the help page doesn't answer your question, open up a new [discussion](https:
 
 ## How to contribute
 
-Read more about contributing to Dark Reader in [CONTRIBUTING.md](https://github.com/darkreader/darkreader/blob/master/CONTRIBUTING.md).
+Read more about contributing to Dark Reader in [CONTRIBUTING.md](https://github.com/darkreader/darkreader/blob/main/CONTRIBUTING.md).
 
 ## Building for use
 
@@ -102,6 +102,12 @@ However, this can be enabled using the following steps:
 - Click on the Dev tools button (in the bottom-right corner).
 - Click on the Preview new design button.
 - Enable the `Synchronize site fixes` setting under `Settings -> Manage Settings`.
+
+To force a synchronization of the sites fixes (when the corresponding setting is enabled), use the following steps:
+
+- Click on the Dark Reader icon.
+- Click on the Dev tools button (in the bottom-right corner).
+- Click on the Reset button. This will remove any custom site fixes you may have.
 
 <h2 align="center">Contributors</h2>
 <br/>

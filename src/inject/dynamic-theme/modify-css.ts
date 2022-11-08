@@ -1,5 +1,4 @@
-import type {RGBA} from '../../utils/color';
-import {lowerCalcExpression, parse, rgbToHSL, hslToString} from '../../utils/color';
+import {parseColorWithCache, rgbToHSL, hslToString} from '../../utils/color';
 import {clamp} from '../../utils/math';
 import {getMatches} from '../../utils/text';
 import {getAbsoluteURL} from '../../utils/url';
@@ -8,7 +7,7 @@ import {cssURLRegex, getCSSURLValue, getCSSBaseBath} from './css-rules';
 import type {ImageDetails} from './image';
 import {getImageDetails, getFilteredImageDataURL, cleanImageProcessingCache} from './image';
 import type {CSSVariableModifier, VariablesStore} from './variables';
-import {logWarn, logInfo} from '../../utils/log';
+import {logWarn, logInfo} from '../utils/log';
 import type {FilterConfig, Theme} from '../../definitions';
 import {isFirefox, isCSSColorSchemePropSupported} from '../../utils/platform';
 import type {parsedGradient} from '../../utils/parsing';
@@ -59,13 +58,17 @@ export function getModifiableCSSDeclaration(
         if (modifier) {
             return {property, value: modifier, important: getPriority(rule.style, property), sourceValue: value};
         }
+    } else if (property === 'color-scheme') {
+        // Note: this if statement needs to be above the next one
+        logWarn('CSS property color-scheme is not supported');
+        return null;
     } else if (
         (property.includes('color') && property !== '-webkit-print-color-adjust') ||
         property === 'fill' ||
         property === 'stroke' ||
         property === 'stop-color'
     ) {
-        const modifier = getColorModifier(property, value);
+        const modifier = getColorModifier(property, value, rule);
         if (modifier) {
             return {property, value: modifier, important: getPriority(rule.style, property), sourceValue: value};
         }
@@ -99,7 +102,7 @@ export function getModifiedUserAgentStyle(theme: Theme, isIFrame: boolean, style
         lines.push(`    color-scheme: ${theme.mode === 1 ? 'dark' : 'dark light'} !important;`);
         lines.push('}');
     }
-    const bgSelectors = joinSelectors(isIFrame ? '' : 'html, body', styleSystemControls ? 'input, textarea, select, button' : '');
+    const bgSelectors = joinSelectors(isIFrame ? '' : 'html, body', styleSystemControls ? 'input, textarea, select, button, dialog' : '');
     if (bgSelectors) {
         lines.push(`${bgSelectors} {`);
         lines.push(`    background-color: ${modifyBackgroundColor({r: 255, g: 255, b: 255}, theme)};`);
@@ -140,7 +143,7 @@ export function getSelectionColor(theme: Theme) {
         backgroundColorSelection = modifyBackgroundColor({r: 0, g: 96, b: 212}, {...theme, grayscale: 0});
         foregroundColorSelection = modifyForegroundColor({r: 255, g: 255, b: 255}, {...theme, grayscale: 0});
     } else {
-        const rgb = parse(theme.selectionColor);
+        const rgb = parseColorWithCache(theme.selectionColor);
         const hsl = rgbToHSL(rgb);
         backgroundColorSelection = theme.selectionColor;
         if (hsl.l < 0.5) {
@@ -182,7 +185,7 @@ function getModifiedScrollbarStyle(theme: Theme) {
         colorThumbActive = modifyBackgroundColor({r: 96, g: 96, b: 96}, theme);
         colorCorner = modifyBackgroundColor({r: 255, g: 255, b: 255}, theme);
     } else {
-        const rgb = parse(theme.scrollbarColor);
+        const rgb = parseColorWithCache(theme.scrollbarColor);
         const hsl = rgbToHSL(rgb);
         const isLight = hsl.l > 0.5;
         const lighten = (lighter: number) => ({...hsl, l: clamp(hsl.l + lighter, 0, 1)});
@@ -220,7 +223,7 @@ function getModifiedScrollbarStyle(theme: Theme) {
 export function getModifiedFallbackStyle(filter: FilterConfig, {strict}: {strict: boolean}) {
     const lines: string[] = [];
     // https://github.com/darkreader/darkreader/issues/3618#issuecomment-895477598
-    const isMicrosoft = location.hostname.endsWith('microsoft.com');
+    const isMicrosoft = ['microsoft.com', 'docs.microsoft.com'].includes(location.hostname);
     lines.push(`html, body, ${strict ? `body :not(iframe)${isMicrosoft ? ':not(div[style^="position:absolute;top:0;left:-"]' : ''}` : 'body > :not(iframe)'} {`);
     lines.push(`    background-color: ${modifyBackgroundColor({r: 255, g: 255, b: 255}, filter)} !important;`);
     lines.push(`    border-color: ${modifyBorderColor({r: 64, g: 64, b: 64}, filter)} !important;`);
@@ -238,48 +241,31 @@ const unparsableColors = new Set([
     'unset',
 ]);
 
-const colorParseCache = new Map<string, RGBA>();
-
-export function parseColorWithCache($color: string) {
-    $color = $color.trim();
-    if (colorParseCache.has($color)) {
-        return colorParseCache.get($color);
-    }
-    // We cannot _really_ parse any color which has the calc() expression
-    // So we try our best-efforts to remove those and then parse the value.
-    if ($color.includes('calc(')) {
-        $color = lowerCalcExpression($color);
-    }
-    const color = parse($color);
-    colorParseCache.set($color, color);
-    return color;
-}
-
-export function tryParseColor($color: string) {
-    try {
-        return parseColorWithCache($color);
-    } catch (err) {
-        return null;
-    }
-}
-
-function getColorModifier(prop: string, value: string): string | CSSValueModifier {
+function getColorModifier(prop: string, value: string, rule: CSSStyleRule): string | CSSValueModifier {
     if (unparsableColors.has(value.toLowerCase())) {
         return value;
     }
-    try {
-        const rgb = parseColorWithCache(value);
-        if (prop.includes('background')) {
-            return (filter) => modifyBackgroundColor(rgb, filter);
-        }
-        if (prop.includes('border') || prop.includes('outline')) {
-            return (filter) => modifyBorderColor(rgb, filter);
-        }
-        return (filter) => modifyForegroundColor(rgb, filter);
-    } catch (err) {
-        logWarn('Color parse error', err);
+    const rgb = parseColorWithCache(value);
+    if (!rgb) {
+        logWarn("Couldn't parse color", value);
         return null;
     }
+
+    if (prop.includes('background')) {
+        if (
+            (rule.style.webkitMaskImage && rule.style.webkitMaskImage !== 'none') ||
+            (rule.style.webkitMask && !rule.style.webkitMask.startsWith('none')) ||
+            (rule.style.mask && rule.style.mask !== 'none') ||
+            (rule.style.getPropertyValue('mask-image') && rule.style.getPropertyValue('mask-image') !== 'none')
+        ) {
+            return (filter) => modifyForegroundColor(rgb, filter);
+        }
+        return (filter) => modifyBackgroundColor(rgb, filter);
+    }
+    if (prop.includes('border') || prop.includes('outline')) {
+        return (filter) => modifyBorderColor(rgb, filter);
+    }
+    return (filter) => modifyForegroundColor(rgb, filter);
 }
 
 const imageDetailsCache = new Map<string, ImageDetails>();
@@ -342,26 +328,26 @@ export function getBgImageModifier(
         const getGradientModifier = (gradient: parsedGradient) => {
             const {typeGradient, match, hasComma} = gradient;
 
-            const partsRegex = /([^\(\),]+(\([^\(\)]*(\([^\(\)]*\)*[^\(\)]*)?\))?[^\(\),]*),?/g;
+            const partsRegex = /([^\(\),]+(\([^\(\)]*(\([^\(\)]*\)*[^\(\)]*)?\))?([^\(\), ]|( (?!calc)))*),?/g;
             const colorStopRegex = /^(from|color-stop|to)\(([^\(\)]*?,\s*)?(.*?)\)$/;
 
             const parts = getMatches(partsRegex, match, 1).map((part) => {
                 part = part.trim();
 
-                let rgb = tryParseColor(part);
+                let rgb = parseColorWithCache(part);
                 if (rgb) {
                     return (filter: FilterConfig) => modifyGradientColor(rgb, filter);
                 }
 
                 const space = part.lastIndexOf(' ');
-                rgb = tryParseColor(part.substring(0, space));
+                rgb = parseColorWithCache(part.substring(0, space));
                 if (rgb) {
                     return (filter: FilterConfig) => `${modifyGradientColor(rgb, filter)} ${part.substring(space + 1)}`;
                 }
 
                 const colorStopMatch = part.match(colorStopRegex);
                 if (colorStopMatch) {
-                    rgb = tryParseColor(colorStopMatch[3]);
+                    rgb = parseColorWithCache(colorStopMatch[3]);
                     if (rgb) {
                         return (filter: FilterConfig) => `${colorStopMatch[1]}(${colorStopMatch[2] ? `${colorStopMatch[2]}, ` : ''}${modifyGradientColor(rgb, filter)})`;
                     }
@@ -380,6 +366,7 @@ export function getBgImageModifier(
                 return null;
             }
             let url = getCSSURLValue(urlValue);
+            const isURLEmpty = url.length === 0;
             const {parentStyleSheet} = rule;
             const baseURL = (parentStyleSheet && parentStyleSheet.href) ?
                 getCSSBaseBath(parentStyleSheet.href) :
@@ -389,6 +376,9 @@ export function getBgImageModifier(
             const absoluteValue = `url("${url}")`;
 
             return async (filter: FilterConfig) => {
+                if (isURLEmpty) {
+                    return "url('')";
+                }
                 let imageDetails: ImageDetails;
                 if (imageDetailsCache.has(url)) {
                     imageDetails = imageDetailsCache.get(url);
@@ -428,6 +418,7 @@ export function getBgImageModifier(
             const {isDark, isLight, isTransparent, isLarge, isTooLarge, width} = imageDetails;
             let result: string;
             if (isTooLarge) {
+                logInfo(`Not modifying too large image ${imageDetails.src}`);
                 result = `url("${imageDetails.src}")`;
             } else if (isDark && isTransparent && filter.mode === 1 && !isLarge && width > 2) {
                 logInfo(`Inverting dark image ${imageDetails.src}`);
@@ -435,6 +426,7 @@ export function getBgImageModifier(
                 result = `url("${inverted}")`;
             } else if (isLight && !isTransparent && filter.mode === 1) {
                 if (isLarge) {
+                    logInfo(`Not modifying light non-transparent large image ${imageDetails.src}`);
                     result = 'none';
                 } else {
                     logInfo(`Dimming light image ${imageDetails.src}`);
@@ -446,6 +438,7 @@ export function getBgImageModifier(
                 const filtered = getFilteredImageDataURL(imageDetails, {...filter, brightness: clamp(filter.brightness - 10, 5, 200), sepia: clamp(filter.sepia + 10, 0, 100)});
                 result = `url("${filtered}")`;
             } else {
+                logInfo(`Not modifying too large image ${imageDetails.src}`);
                 result = null;
             }
             return result;
@@ -454,14 +447,28 @@ export function getBgImageModifier(
         const modifiers: CSSValueModifier[] = [];
 
         let matchIndex = 0;
+        let prevHasComma = false;
         matches.forEach(({type, match, index, typeGradient, hasComma, offset}, i) => {
             const matchStart = index;
             const prefixStart = matchIndex;
             const matchEnd = matchStart + match.length + offset;
             matchIndex = matchEnd;
 
-            // Make sure we still push all the unrelated content between gradients and URL's.
-            prefixStart !== matchStart && modifiers.push(() => value.substring(prefixStart, matchStart));
+            // Make sure we still push all the unrelated content between gradients and URLs.
+            if (prefixStart !== matchStart) {
+                if (prevHasComma) {
+                    modifiers.push(() => {
+                        let betweenValue = value.substring(prefixStart, matchStart);
+                        if (betweenValue[0] === ',') {
+                            betweenValue = betweenValue.substring(1);
+                        }
+                        return betweenValue;
+                    });
+                } else {
+                    modifiers.push(() => value.substring(prefixStart, matchStart));
+                }
+            }
+            prevHasComma = hasComma || false;
 
             if (type === 'url') {
                 modifiers.push(getURLModifier(match));
@@ -481,7 +488,12 @@ export function getBgImageModifier(
                     return asyncResults.filter(Boolean).join('');
                 });
             }
-            return results.join('');
+            // Strip `, initial` suffix. This is some weird computed value by the browser
+            const combinedResult = results.join('');
+            if (combinedResult.endsWith(', initial')) {
+                return combinedResult.slice(0, -9);
+            }
+            return combinedResult;
         };
     } catch (err) {
         logWarn(`Unable to parse gradient ${value}`, err);
@@ -499,7 +511,7 @@ export function getShadowModifierWithInfo(value: string): CSSValueModifierWithIn
             const matchIndex = value.indexOf(match, index);
             const matchEnd = matchIndex + match.length;
             index = matchEnd;
-            const rgb = tryParseColor(match);
+            const rgb = parseColorWithCache(match);
             if (!rgb) {
                 notParsed++;
                 return () => value.substring(prefixIndex, matchEnd);
@@ -555,7 +567,6 @@ function getVariableDependantModifier(
 }
 
 export function cleanModificationCache() {
-    colorParseCache.clear();
     clearColorModificationCache();
     imageDetailsCache.clear();
     cleanImageProcessingCache();

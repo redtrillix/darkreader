@@ -1,6 +1,8 @@
 import {MessageType} from '../utils/message';
-import {isFirefox} from '../utils/platform';
+import {isFirefox, isMobile} from '../utils/platform';
 import type {Message} from '../definitions';
+
+declare const __CHROMIUM_MV3__: boolean;
 
 export function classes(...args: Array<string | {[cls: string]: boolean}>) {
     const classes: string[] = [];
@@ -38,7 +40,7 @@ export function openFile(options: {extensions: string[]}, callback: (content: st
 }
 
 export function saveFile(name: string, content: string) {
-    if (isFirefox) {
+    if (__CHROMIUM_MV3__ || isFirefox || isMobile) {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([content]));
         a.download = name;
@@ -135,7 +137,7 @@ export async function getFontList() {
                 'monospace',
                 'cursive',
                 'fantasy',
-                'system-ui'
+                'system-ui',
             ]);
             return;
         }
@@ -144,4 +146,72 @@ export async function getFontList() {
             resolve(fonts);
         });
     });
+}
+
+type page = 'devtools' | 'stylesheet-editor';
+
+// TODO(Anton): There must be a better way to do this
+// This function ping-pongs a message to possible DevTools popups.
+// This function should have reasonable performance since it sends
+// messages only to popups and not regular windows.
+async function getExtensionPageTabMV3(): Promise<chrome.tabs.Tab> {
+    return new Promise<chrome.tabs.Tab>((resolve) => {
+        chrome.windows.getAll({
+            populate: true,
+            windowTypes: ['popup'],
+        }, (w) => {
+            const responses: Array<Promise<string>> = [];
+            let found = false;
+            for (const window of w) {
+                const response = chrome.tabs.sendMessage<string, 'getExtensionPageTabMV3_pong'>(window.tabs[0].id, 'getExtensionPageTabMV3_ping', {frameId: 0});
+                response.then((response) => {
+                    if (response === 'getExtensionPageTabMV3_pong') {
+                        found = true;
+                        resolve(window.tabs[0]);
+                    }
+                });
+                responses.push(response);
+            }
+            Promise.all(responses).then(() => !found && resolve(null));
+        });
+    });
+}
+
+async function getExtensionPageTab(url: string): Promise<chrome.tabs.Tab> {
+    if (__CHROMIUM_MV3__) {
+        return getExtensionPageTabMV3();
+    }
+    return new Promise<chrome.tabs.Tab>((resolve) => {
+        chrome.tabs.query({
+            url,
+        }, ([tab]) => resolve(tab || null));
+    });
+}
+
+export async function openExtensionPage(page: page) {
+    const url = chrome.runtime.getURL(`/ui/${page}/index.html`);
+    if (isMobile) {
+        const extensionPageTab = await getExtensionPageTab(url);
+        if (extensionPageTab !== null) {
+            chrome.tabs.update(extensionPageTab.id, {active: true});
+            window.close();
+        } else {
+            chrome.tabs.create({url});
+            window.close();
+        }
+    } else {
+        const extensionPageTab = await getExtensionPageTab(url);
+        if (extensionPageTab !== null) {
+            chrome.windows.update(extensionPageTab.windowId, {focused: true});
+            window.close();
+        } else {
+            chrome.windows.create({
+                type: 'popup',
+                url,
+                width: 600,
+                height: 600,
+            });
+            window.close();
+        }
+    }
 }

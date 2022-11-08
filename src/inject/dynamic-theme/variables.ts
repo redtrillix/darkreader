@@ -1,10 +1,11 @@
 import {modifyBackgroundColor, modifyBorderColor, modifyForegroundColor} from '../../generators/modify-colors';
 import {getParenthesesRange} from '../../utils/text';
 import {iterateCSSRules, iterateCSSDeclarations} from './css-rules';
-import {tryParseColor, getBgImageModifier, getShadowModifierWithInfo} from './modify-css';
+import {getBgImageModifier, getShadowModifierWithInfo} from './modify-css';
 import type {CSSValueModifier} from './modify-css';
 import type {Theme} from '../../definitions';
 import type {RGBA} from '../../utils/color';
+import {parseColorWithCache} from '../../utils/color';
 
 export interface ModifiedVarDeclaration {
     property: string;
@@ -217,9 +218,15 @@ export class VariablesStore {
     }
 
     getModifierForVarDependant(property: string, sourceValue: string): CSSValueModifier {
+        // TODO(gusted): This condition is incorrect, as the sourceValue still contains a variable.
+        // Simply replacing it with some definition is incorrect as variables are element-independent.
+        // Fully handling this requires having a function that gives the variable's value given an
+        // element's position in the DOM, but that's quite computationally hard to facilitate. We'll
+        // probably just handle edge-cases like `rgb(22 163 74/var(--tb-bg-opacity)` and hope that
+        // lowering the opacity is enough.
         if (sourceValue.match(/^\s*(rgb|hsl)a?\(/)) {
             const isBg = property.startsWith('background');
-            const isText = (property === 'color' || property === 'caret-color');
+            const isText = isTextColorProperty(property);
             return (theme) => {
                 let value = insertVarValues(sourceValue, this.unstableVarValues);
                 if (!value) {
@@ -238,7 +245,7 @@ export class VariablesStore {
                 );
             };
         }
-        if (property === 'color' || property === 'caret-color') {
+        if (isTextColorProperty(property)) {
             return (theme) => {
                 return replaceCSSVariablesNames(
                     sourceValue,
@@ -265,7 +272,7 @@ export class VariablesStore {
                         },
                         (fallback) => tryModifyBgColor(fallback, theme),
                     );
-                    // Check if property is box-shadow and if so, do a pass-trough to modify the shadow
+                    // Check if the property is box-shadow and if so, do a pass-through to modify the shadow.
                     if (property === 'box-shadow') {
                         const shadowModifier = getShadowModifierWithInfo(variableReplaced);
                         const modifiedShadow = shadowModifier(theme);
@@ -321,7 +328,7 @@ export class VariablesStore {
         }
     }
 
-    // Because of the similair expensive task between the old `collectVariables`
+    // Because of the similar expensive task between the old `collectVariables`
     // and `collectVarDepandant`, we only want to do it once.
     // This function should only do the same expensive task once
     // and ensure that the result comes to the correct task.
@@ -361,7 +368,7 @@ export class VariablesStore {
         }
         this.definedVars.add(varName);
 
-        const color = tryParseColor(value);
+        const color = parseColorWithCache(value);
         if (color) {
             this.unknownColorVars.add(varName);
         } else if (
@@ -404,7 +411,7 @@ export class VariablesStore {
             });
         } else if (property === 'background-color' || property === 'box-shadow') {
             this.iterateVarDeps(value, (v) => this.resolveVariableType(v, VAR_TYPE_BGCOLOR));
-        } else if (property === 'color' || property === 'caret-color') {
+        } else if (isTextColorProperty(property)) {
             this.iterateVarDeps(value, (v) => this.resolveVariableType(v, VAR_TYPE_TEXTCOLOR));
         } else if (property.startsWith('border') || property.startsWith('outline')) {
             this.iterateVarDeps(value, (v) => this.resolveVariableType(v, VAR_TYPE_BORDERCOLOR));
@@ -632,12 +639,16 @@ function isConstructedColorVar(value: string) {
     return value.match(/^\s*(rgb|hsl)a?\(/);
 }
 
+function isTextColorProperty(property: string) {
+    return property === 'color' || property === 'caret-color' || property === '-webkit-text-fill-color';
+}
+
 // ex. 131,123,132 | 1,341, 122
 const rawValueRegex = /^\d{1,3}, ?\d{1,3}, ?\d{1,3}$/;
 
 function parseRawValue(color: string) {
     if (rawValueRegex.test(color)) {
-        // Convert the raw value into a use-able rgb(...) value, such that it can
+        // Convert the raw value into a useable rgb(...) value, such that it can
         // be properly used with other functions that expect such value.
         const splitted = color.split(',');
         let resultInRGB = 'rgb(';
@@ -654,15 +665,15 @@ function parseRawValue(color: string) {
 function handleRawValue(color: string, theme: Theme, modifyFunction: (rgb: RGBA, theme: Theme) => string) {
     const {isRaw, color: newColor} = parseRawValue(color);
 
-    const rgb = tryParseColor(newColor);
+    const rgb = parseColorWithCache(newColor);
     if (rgb) {
         const outputColor = modifyFunction(rgb, theme);
 
         // If it's raw, we need to convert it back to the "raw" format.
         if (isRaw) {
-            // This should techincally never fail(returning empty string),
-            // but just to be safe we will return outputColor.
-            const outputInRGB = tryParseColor(outputColor);
+            // This should technically never fail(returning an empty string),
+            // but just to be safe, we will return outputColor.
+            const outputInRGB = parseColorWithCache(outputColor);
             return outputInRGB ? `${outputInRGB.r}, ${outputInRGB.g}, ${outputInRGB.b}` : outputColor;
         }
         return outputColor;

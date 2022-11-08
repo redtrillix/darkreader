@@ -1,6 +1,8 @@
 import {validateSettings, validateTheme} from '../../../src/utils/validation';
 import {DEFAULT_SETTINGS, DEFAULT_THEME} from '../../../src/defaults';
 import type {Theme, UserSettings} from '../../../src/definitions';
+import {AutomationMode} from '../../../src/utils/automation';
+import {ThemeEngine} from '../../../src/generators/theme-engines';
 
 test('Settings Validation', () => {
     const defaultTheme = JSON.parse(JSON.stringify(DEFAULT_THEME));
@@ -43,7 +45,7 @@ test('Settings Validation', () => {
     };
     themeValidation = validateTheme(wonkyTheme as any);
     expect(themeValidation.errors.length).toBeGreaterThan(0);
-    expect(wonkyTheme).toEqual(DEFAULT_THEME);
+    expect(wonkyTheme as any).toEqual(DEFAULT_THEME);
 
     const defaultSet = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
     let validation = validateSettings(defaultSet);
@@ -100,8 +102,11 @@ test('Settings Validation', () => {
         changeBrowserTheme: 1,
         syncSettings: null as boolean,
         syncSitesFixes: 0,
-        automation: 'off',
-        automationBehaviour: 'Default',
+        automation: {
+            enabled: false,
+            behavior: 'OnOff',
+            mode: '',
+        },
         time: {
             activation: '10:00PM',
             deactivation: '19:00',
@@ -118,7 +123,7 @@ test('Settings Validation', () => {
     };
     validation = validateSettings(wonkySet as any);
     expect(validation.errors.length).toBeGreaterThan(0);
-    expect(wonkySet).toEqual({
+    expect(wonkySet as any).toEqual({
         ...DEFAULT_SETTINGS,
         siteList: ['a.com', 'b.com'],
         presets: [{id: 'p5', name: 'P5', urls: ['a.com'], theme: {brightness: 100}}],
@@ -154,7 +159,7 @@ test('Settings Validation', () => {
             useFont: true,
             fontFamily: 'Comic Sans',
             textStroke: 0.5,
-            engine: 'dynamicTheme',
+            engine: ThemeEngine.dynamicTheme,
             stylesheet: '.x { color: red; }',
             darkSchemeBackgroundColor: '#abcdef',
             darkSchemeTextColor: '#abc123',
@@ -179,8 +184,11 @@ test('Settings Validation', () => {
         changeBrowserTheme: true,
         syncSettings: false,
         syncSitesFixes: true,
-        automation: 'time',
-        automationBehaviour: 'Scheme',
+        automation: {
+            enabled: true,
+            mode: AutomationMode.LOCATION,
+            behavior: 'OnOff',
+        },
         time: {
             activation: '18:00',
             deactivation: '7:00',

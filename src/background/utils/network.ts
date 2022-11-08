@@ -3,6 +3,8 @@ import {getStringSize} from '../../utils/text';
 import {getDuration} from '../../utils/time';
 import {isXMLHttpRequestSupported, isFetchSupported} from '../../utils/platform';
 
+declare const __TEST__: boolean;
+
 interface RequestParams {
     url: string;
     timeout?: number;
@@ -72,26 +74,26 @@ interface CacheRecord {
 
 class LimitedCacheStorage {
     // TODO: remove any cast once declarations are updated
-    private static QUOTA_BYTES = ((navigator as any).deviceMemory || 4) * 16 * 1024 * 1024;
+    private static QUOTA_BYTES = ((!__TEST__ && (navigator as any).deviceMemory) || 4) * 16 * 1024 * 1024;
     private static TTL = getDuration({minutes: 10});
     private static ALARM_NAME = 'network';
 
     private bytesInUse = 0;
     private records = new Map<string, CacheRecord>();
-    private alarmIsActive = false;
+    private static alarmIsActive = false;
 
     constructor() {
         chrome.alarms.onAlarm.addListener(async (alarm) => {
             if (alarm.name === LimitedCacheStorage.ALARM_NAME) {
                 // We schedule only one-time alarms, so once it goes off,
                 // there are no more alarms scheduled.
-                this.alarmIsActive = false;
+                LimitedCacheStorage.alarmIsActive = false;
                 this.removeExpiredRecords();
             }
         });
     }
 
-    private ensureAlarmIsScheduled(){
+    private static ensureAlarmIsScheduled(){
         if (!this.alarmIsActive) {
             chrome.alarms.create(LimitedCacheStorage.ALARM_NAME, {delayInMinutes: 1});
             this.alarmIsActive = true;
@@ -114,7 +116,7 @@ class LimitedCacheStorage {
     }
 
     set(url: string, value: string) {
-        this.ensureAlarmIsScheduled();
+        LimitedCacheStorage.ensureAlarmIsScheduled();
 
         const size = getStringSize(value);
         if (size > LimitedCacheStorage.QUOTA_BYTES) {
@@ -147,7 +149,7 @@ class LimitedCacheStorage {
         }
 
         if (this.records.size !== 0) {
-            this.ensureAlarmIsScheduled();
+            LimitedCacheStorage.ensureAlarmIsScheduled();
         }
     }
 }
